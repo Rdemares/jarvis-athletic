@@ -63,8 +63,7 @@ export default function App() {
     setMessages(prev => [...prev, { role, text, id: Date.now() + Math.random() }])
   }
 
-  async function speakText(text, onDone) {
-    // Stop any in-progress audio
+  function speakText(text, onDone) {
     if (sourceNodeRef.current) {
       try { sourceNodeRef.current.stop() } catch {}
       sourceNodeRef.current = null
@@ -74,67 +73,31 @@ export default function App() {
     setIsSpeaking(true)
     setOrbState('speaking')
 
-    try {
-      if (!VOICE_ID || !API_KEY) throw new Error(`Env missing: key=${!!API_KEY} voice=${!!VOICE_ID}`)
-
-      setDebugInfo(`Calling ElevenLabs... key=${API_KEY.slice(0,8)}... voice=${VOICE_ID.slice(0,8)}...`)
-
-      const resp = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-        {
-          method: 'POST',
-          headers: {
-            'xi-api-key': API_KEY,
-            'Content-Type': 'application/json',
-            'Accept': 'audio/mpeg',
-          },
-          body: JSON.stringify({
-            text,
-            model_id: 'eleven_multilingual_v2',
-            voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-          })
-        }
-      )
-
-      if (!resp.ok) {
-        const detail = await resp.text().catch(() => String(resp.status))
-        throw new Error(`HTTP ${resp.status}: ${detail}`)
-      }
-
-      setDebugInfo('Got audio response, decoding...')
-      const arrayBuffer = await resp.arrayBuffer()
-
-      const ctx = audioCtxRef.current
-      if (!ctx) throw new Error('AudioContext not created — session not started via button?')
-      if (ctx.state === 'suspended') await ctx.resume()
-
-      const decoded = await ctx.decodeAudioData(arrayBuffer)
-      const source  = ctx.createBufferSource()
-      source.buffer = decoded
-      source.connect(ctx.destination)
-      sourceNodeRef.current = source
-
-      source.onended = () => {
-        sourceNodeRef.current = null
-        isSpeakingRef.current = false
-        setIsSpeaking(false)
-        setOrbState('')
-        setOrbLabel('YOUR TURN')
-        setDebugInfo('')
-        if (onDone) onDone()
-      }
-
-      setDebugInfo('Playing...')
-      source.start(0)
-    } catch (err) {
-      console.error('ElevenLabs TTS failed:', err)
-      setDebugInfo(`ERROR: ${err.message}`)
-      setOrbLabel('VOICE ERROR — tap skip')
+    const synth = window.speechSynthesis
+    synth.cancel()
+    const utt = new SpeechSynthesisUtterance(text)
+    utt.rate = 0.95
+    utt.pitch = 1.0
+    utt.volume = 1.0
+    const voices = synth.getVoices()
+    const preferred = voices.find(v => v.lang === 'en-US' && v.name.toLowerCase().includes('google'))
+      || voices.find(v => v.lang === 'en-US')
+      || voices[0]
+    if (preferred) utt.voice = preferred
+    utt.onend = () => {
+      isSpeakingRef.current = false
+      setIsSpeaking(false)
+      setOrbState('')
+      setOrbLabel('YOUR TURN')
+      if (onDone) onDone()
+    }
+    utt.onerror = () => {
       isSpeakingRef.current = false
       setIsSpeaking(false)
       setOrbState('')
       if (onDone) onDone()
     }
+    synth.speak(utt)
   }
 
   const playStep = useCallback((i) => {
@@ -304,14 +267,6 @@ export default function App() {
             </div>
           ))}
         </div>
-
-        {debugInfo && (
-          <div style={{
-            background:'#1a0a0a', border:'1px solid #ff3d3d', color:'#ff8080',
-            fontFamily:'monospace', fontSize:'11px', padding:'8px 12px',
-            margin:'0 1rem', borderRadius:'8px', wordBreak:'break-all'
-          }}>{debugInfo}</div>
-        )}
 
         <div className="session-controls">
           <div className="live-text">{liveText}</div>
