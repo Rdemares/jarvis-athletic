@@ -49,6 +49,7 @@ export default function App() {
   const [isSpeaking, setIsSpeaking]   = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
   const [voiceHint, setVoiceHint] = useState('tap mic and speak, or press skip')
+  const [debugInfo, setDebugInfo] = useState('')
 
   const recognitionRef    = useRef(null)
   const autoTimerRef      = useRef(null)
@@ -74,6 +75,10 @@ export default function App() {
     setOrbState('speaking')
 
     try {
+      if (!VOICE_ID || !API_KEY) throw new Error(`Env missing: key=${!!API_KEY} voice=${!!VOICE_ID}`)
+
+      setDebugInfo(`Calling ElevenLabs... key=${API_KEY.slice(0,8)}... voice=${VOICE_ID.slice(0,8)}...`)
+
       const resp = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
         {
@@ -85,21 +90,22 @@ export default function App() {
           },
           body: JSON.stringify({
             text,
-            model_id: 'eleven_turbo_v2_5',
+            model_id: 'eleven_monolingual_v1',
             voice_settings: { stability: 0.5, similarity_boost: 0.75 }
           })
         }
       )
 
       if (!resp.ok) {
-        const detail = await resp.text().catch(() => resp.status)
-        throw new Error(`ElevenLabs ${resp.status}: ${detail}`)
+        const detail = await resp.text().catch(() => String(resp.status))
+        throw new Error(`HTTP ${resp.status}: ${detail}`)
       }
 
+      setDebugInfo('Got audio response, decoding...')
       const arrayBuffer = await resp.arrayBuffer()
 
-      // Reuse the AudioContext created during the user gesture in startSession()
       const ctx = audioCtxRef.current
+      if (!ctx) throw new Error('AudioContext not created — session not started via button?')
       if (ctx.state === 'suspended') await ctx.resume()
 
       const decoded = await ctx.decodeAudioData(arrayBuffer)
@@ -114,12 +120,15 @@ export default function App() {
         setIsSpeaking(false)
         setOrbState('')
         setOrbLabel('YOUR TURN')
+        setDebugInfo('')
         if (onDone) onDone()
       }
 
+      setDebugInfo('Playing...')
       source.start(0)
     } catch (err) {
       console.error('ElevenLabs TTS failed:', err)
+      setDebugInfo(`ERROR: ${err.message}`)
       setOrbLabel('VOICE ERROR — tap skip')
       isSpeakingRef.current = false
       setIsSpeaking(false)
@@ -295,6 +304,14 @@ export default function App() {
             </div>
           ))}
         </div>
+
+        {debugInfo && (
+          <div style={{
+            background:'#1a0a0a', border:'1px solid #ff3d3d', color:'#ff8080',
+            fontFamily:'monospace', fontSize:'11px', padding:'8px 12px',
+            margin:'0 1rem', borderRadius:'8px', wordBreak:'break-all'
+          }}>{debugInfo}</div>
+        )}
 
         <div className="session-controls">
           <div className="live-text">{liveText}</div>
