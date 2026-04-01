@@ -52,7 +52,8 @@ export default function App() {
 
   const recognitionRef    = useRef(null)
   const autoTimerRef      = useRef(null)
-  const audioRef          = useRef(null)
+  const audioCtxRef       = useRef(null)
+  const sourceNodeRef     = useRef(null)
   const stepRef           = useRef(0)
   const isSpeakingRef     = useRef(false)
   const isListeningRef    = useRef(false)
@@ -62,10 +63,12 @@ export default function App() {
   }
 
   async function speakText(text, onDone) {
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current = null
+    // Stop any in-progress audio
+    if (sourceNodeRef.current) {
+      try { sourceNodeRef.current.stop() } catch {}
+      sourceNodeRef.current = null
     }
+
     isSpeakingRef.current = true
     setIsSpeaking(true)
     setOrbState('speaking')
@@ -78,24 +81,35 @@ export default function App() {
           headers: {
             'xi-api-key': API_KEY,
             'Content-Type': 'application/json',
+            'Accept': 'audio/mpeg',
           },
           body: JSON.stringify({
             text,
-            model_id: 'eleven_multilingual_v2',
+            model_id: 'eleven_turbo_v2_5',
             voice_settings: { stability: 0.5, similarity_boost: 0.75 }
           })
         }
       )
 
-      if (!resp.ok) throw new Error(`ElevenLabs error: ${resp.status}`)
+      if (!resp.ok) {
+        const detail = await resp.text().catch(() => resp.status)
+        throw new Error(`ElevenLabs ${resp.status}: ${detail}`)
+      }
 
-      const blob = await resp.blob()
-      const url  = URL.createObjectURL(blob)
-      const audio = new Audio(url)
-      audioRef.current = audio
+      const arrayBuffer = await resp.arrayBuffer()
 
-      audio.onended = () => {
-        URL.revokeObjectURL(url)
+      // Reuse the AudioContext created during the user gesture in startSession()
+      const ctx = audioCtxRef.current
+      if (ctx.state === 'suspended') await ctx.resume()
+
+      const decoded = await ctx.decodeAudioData(arrayBuffer)
+      const source  = ctx.createBufferSource()
+      source.buffer = decoded
+      source.connect(ctx.destination)
+      sourceNodeRef.current = source
+
+      source.onended = () => {
+        sourceNodeRef.current = null
         isSpeakingRef.current = false
         setIsSpeaking(false)
         setOrbState('')
@@ -103,16 +117,10 @@ export default function App() {
         if (onDone) onDone()
       }
 
-      audio.onerror = () => {
-        isSpeakingRef.current = false
-        setIsSpeaking(false)
-        setOrbState('')
-        if (onDone) onDone()
-      }
-
-      audio.play()
+      source.start(0)
     } catch (err) {
       console.error('ElevenLabs TTS failed:', err)
+      setOrbLabel('VOICE ERROR — tap skip')
       isSpeakingRef.current = false
       setIsSpeaking(false)
       setOrbState('')
@@ -146,6 +154,10 @@ export default function App() {
   }, [])
 
   function startSession() {
+    // Create AudioContext here — inside a user gesture — so autoplay is unlocked
+    if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+    }
     setScreen('session')
     setStep(0)
     stepRef.current = 0
